@@ -16,13 +16,12 @@ async def get_market_data():
     """Fetch current market data for all configured assets"""
     assets = []
     try:
-        with open('/Users/studio/answerlayer/asset-monitor/assets.txt', 'r') as f:
+        with open('/Users/studio/answerlayer/instrument-monitor/assets.txt', 'r') as f:
             equities = [line.strip() for line in f if line.strip()]
 
-        with open('/Users/studio/answerlayer/asset-monitor/commodities.txt', 'r') as f:
-            commodities = [line.strip() for line in f if line.strip()]
+        # commodities.txt is removed, no longer used
 
-        all_assets = equities + commodities
+        all_assets = equities
 
         for symbol in all_assets:
             try:

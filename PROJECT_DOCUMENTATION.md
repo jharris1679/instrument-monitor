@@ -1,6 +1,6 @@
 # Instrument Monitor Pipeline - Technical Documentation
 
-**Author:** Claude AI Assistant  
+**Author:** GLM 4.7 Flash Unquantized, in OpenCode 1.1.65  
 **Date:** February 14, 2026  
 **Project Status:** Working Implementation (10/30 instruments operational)
 

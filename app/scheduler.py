@@ -2,7 +2,7 @@ import schedule
 import time
 import json
 from typing import Dict, List
-from datetime import datetime
+from datetime import datetime, date
 
 from app.market_data_fetcher import MarketDataFetcher
 from app.rss_processor import RSSFeedProcessor
@@ -33,72 +33,71 @@ class MarketMonitor:
         trending_news = self._get_trending_news(news)
         print(f"✓ Fetched {len(news)} news articles")
 
-        # Generate insights
-        print("\nGenerating insights...")
-        insights = self.insight_generator.generate_insights(
+        # Generate briefing
+        print("\nGenerating macro briefing...")
+        result = self.insight_generator.generate_briefing(
             market_data=market_data,
             news=news,
-            current_context="daily"
         )
 
-        # Prioritize insights
-        high_priority = [i for i in insights if i.get('priority') == 'high']
-        medium_priority = [i for i in insights if i.get('priority') == 'medium']
-        low_priority = [i for i in insights if i.get('priority') == 'low']
+        briefing = result.get('briefing', '')
+        sources = result.get('sources', [])
 
-        # Send notifications
-        print("\nSending notifications...")
+        # Send briefing to Slack
+        print("\nSending briefing...")
+        self.slack_notifier.send_update({
+            "title": "📊 Macro Briefing",
+            "briefing": briefing,
+            "sources": sources,
+            "trending_news": trending_news,
+            "report_type": "briefing"
+        })
 
-        # High priority - broadcast
-        if high_priority:
-            print(f"  Sending {len(high_priority)} high priority alerts...")
-            self.slack_notifier.send_alert({
-                "title": "🚨 CRITICAL INSIGHTS",
-                "insights": high_priority,
-                "report_type": "critical"
-            })
-
-        # Medium priority - channel
-        if medium_priority:
-            print(f"  Sending {len(medium_priority)} medium priority updates...")
-            self.slack_notifier.send_update({
-                "title": "📈 Market Updates",
-                "insights": medium_priority,
-                "report_type": "update"
-            })
-
-        # Low priority - detailed report
-        if low_priority:
-            print(f"  Sending {len(low_priority)} summary insights...")
-            self.slack_notifier.send_detailed_report({
-                "title": "📊 Daily Market Summary",
-                "insights": low_priority,
-                "trending_news": trending_news,
-                "report_type": "summary"
-            })
-
-        print(f"\n✓ Report generation complete. {len(insights)} insights generated.")
-        print(f"  - High priority: {len(high_priority)}")
-        print(f"  - Medium priority: {len(medium_priority)}")
-        print(f"  - Low priority: {len(low_priority)}\n")
+        print(f"\n✓ Briefing sent ({len(briefing)} chars, {len(sources)} sources).")
 
     def _get_trending_news(self, news: List[Dict]) -> List[Dict]:
         """Get top 3 most trending news items"""
         return news[:3]
 
+    def update_historical_data(self):
+        """Update OHLCV CSVs with any new trading days"""
+        print(f"Updating historical OHLCV data at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}...")
+        updated = self.market_data.update_historical()
+        total_new = sum(updated.values())
+        if total_new:
+            print(f"✓ Added {total_new} new rows across {sum(1 for v in updated.values() if v)} symbols")
+        else:
+            print("✓ Historical data already up to date")
+
+    def _is_weekend(self):
+        return date.today().weekday() >= 5  # 5=Saturday, 6=Sunday
+
+    def _run_weekday_report(self):
+        if not self._is_weekend():
+            self.run_report()
+
+    def _run_weekend_report(self):
+        if self._is_weekend():
+            self.run_report()
+
     def start_scheduled_reports(self):
         """Start the scheduled reporting system"""
         print("Starting Market Monitor scheduler...")
-        print("Reporting hours: 9am, 12pm, 3pm, 9pm daily")
+        print("Weekday reports: 9am, 12pm, 3pm, 9pm")
+        print("Weekend reports: 9am")
+        print("Historical OHLCV update: 8am daily")
 
-        # Schedule reports at specified times
-        schedule.every().day.at("09:00").do(self.run_report)
-        schedule.every().day.at("12:00").do(self.run_report)
-        schedule.every().day.at("15:00").do(self.run_report)
-        schedule.every().day.at("21:00").do(self.run_report)
+        # Update historical data once daily before markets open
+        schedule.every().day.at("08:00").do(self.update_historical_data)
 
-        # Run immediately on startup
-        self.run_report()
+        # Weekday reports (Mon-Fri): 9am, 12pm, 3pm, 9pm
+        schedule.every().day.at("09:00").do(self._run_weekday_report)
+        schedule.every().day.at("12:00").do(self._run_weekday_report)
+        schedule.every().day.at("15:00").do(self._run_weekday_report)
+        schedule.every().day.at("21:00").do(self._run_weekday_report)
+
+        # Weekend reports (Sat-Sun): 9am only
+        schedule.every().day.at("09:00").do(self._run_weekend_report)
 
         # Keep the scheduler running
         while True:

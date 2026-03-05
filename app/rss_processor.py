@@ -47,7 +47,7 @@ class RSSFeedProcessor:
                 print(f"Error fetching {feed_url}: {e}")
 
         # Sort by published date (newest first)
-        news_items.sort(key=lambda x: x['published'], reverse=True)
+        news_items.sort(key=lambda x: x.get('published') or '', reverse=True)
         return news_items
 
     def _categorize_news(self, entry) -> str:

@@ -1,13 +1,13 @@
 from fastapi import FastAPI
 import yfinance as yf
 
-app = FastAPI(title="Asset Monitor")
+app = FastAPI(title="Instrument Monitor")
 
 @app.get("/")
 async def root():
     return {
         "status": "running",
-        "service": "Asset Monitor",
+        "service": "Instrument Monitor",
         "version": "1.0.0"
     }
 
@@ -16,7 +16,9 @@ async def get_market_data():
     """Fetch current market data for all configured assets"""
     assets = []
     try:
-        with open('/Users/studio/answerlayer/instrument-monitor/assets.txt', 'r') as f:
+        import os
+        assets_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'assets.txt')
+        with open(assets_path, 'r') as f:
             equities = [line.strip() for line in f if line.strip()]
 
         # commodities.txt is removed, no longer used

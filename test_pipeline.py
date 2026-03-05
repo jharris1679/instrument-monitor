@@ -9,7 +9,7 @@ import sys
 from datetime import datetime
 
 # Add asset-monitor to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.rss_processor import RSSFeedProcessor
 from app.market_data_fetcher import MarketDataFetcher
@@ -63,9 +63,9 @@ def test_pipeline():
         if insights:
             print("\n--- Sample Insights ---")
             for i, insight in enumerate(insights[:5], 1):
-                print(f"\n{i}. {insight.get('title', 'N/A')}")
-                print(f"   Source: {insight.get('source', 'N/A')}")
-                print(f"   Price Action: {insight.get('price_action', 'N/A')}")
+                print(f"\n{i}. [{insight.get('category', 'N/A')}] {insight.get('symbol', 'N/A')}")
+                print(f"   {insight.get('description', 'N/A')}")
+                print(f"   Impact: {insight.get('impact_score', 'N/A')}")
                 print(f"   Context: {insight.get('context', 'N/A')}")
 
     except Exception as e:

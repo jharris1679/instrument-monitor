@@ -1,3 +1,4 @@
+import os
 import yfinance as yf
 from typing import List, Dict
 import pandas as pd
@@ -13,11 +14,13 @@ class MarketDataFetcher:
     def load_config(self):
         """Load asset configurations"""
         try:
-            with open('/Users/studio/answerlayer/asset-monitor/assets.txt', 'r') as f:
+            import os as _os
+            assets_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '..', 'assets.txt')
+            with open(assets_path, 'r') as f:
                 self.assets = [line.strip() for line in f if line.strip()]
 
-            with open('/Users/studio/answerlayer/asset-monitor/commodities.txt', 'r') as f:
-                self.commodities = [line.strip() for line in f if line.strip()]
+            # commodities.txt has been removed - only equities are tracked
+            self.commodities = []
         except Exception as e:
             print(f"Error loading config: {e}")
 
@@ -56,6 +59,9 @@ class MarketDataFetcher:
                     if asset_type != 'commodity':
                         historical_data = self._calculate_historical_metrics(symbol, current_price, info.get('regularMarketVolume', 0))
                         result.update(historical_data)
+
+                    # Add simple moving averages from stored OHLCV data
+                    result.update(self.calculate_smas(symbol))
 
                     all_data.append(result)
             except Exception as e:
@@ -123,7 +129,7 @@ class MarketDataFetcher:
                     "30d_avg": None,
                     "7d_trend": None,
                     "7d_volume_avg": None,
-                    "7d_volume变动": None
+                    "7d_volume_change": None
                 }
 
             data = df.tail(7)
@@ -146,7 +152,7 @@ class MarketDataFetcher:
                 "30d_avg": float(df['Close'].mean()),
                 "7d_trend": float(price_change_pct_7d),
                 "7d_volume_avg": int(avg_volume),
-                "7d_volume变动": float(volume_change_pct)
+                "7d_volume_change": float(volume_change_pct)
             }
         except Exception as e:
             print(f"Error calculating historical metrics for {symbol}: {e}")
@@ -157,5 +163,138 @@ class MarketDataFetcher:
                 "30d_avg": None,
                 "7d_trend": None,
                 "7d_volume_avg": None,
-                "7d_volume变动": None
+                "7d_volume_change": None
             }
+
+    SMA_PERIODS = (8, 21, 50, 100, 200)
+
+    def calculate_smas(self, symbol: str, data_dir: str = None) -> Dict:
+        """Calculate simple moving averages from the stored OHLCV CSV.
+
+        Returns dict like {"sma_8": 602.3, "sma_21": 598.1, ...}.
+        Missing values (not enough data) are None.
+        """
+        if data_dir is None:
+            data_dir = self._data_dir()
+        path = os.path.join(data_dir, f"{symbol}.csv")
+        result = {f"sma_{p}": None for p in self.SMA_PERIODS}
+        try:
+            if not os.path.exists(path):
+                return result
+            df = pd.read_csv(path, parse_dates=['Date'], index_col='Date')
+            closes = df['Close']
+            for p in self.SMA_PERIODS:
+                if len(closes) >= p:
+                    result[f"sma_{p}"] = round(float(closes.iloc[-p:].mean()), 4)
+        except Exception as e:
+            print(f"  Error calculating SMAs for {symbol}: {e}")
+        return result
+
+    def fetch_historical_ohlcv(self, symbol: str, period: str = '1y') -> pd.DataFrame:
+        """Fetch daily OHLCV data for a symbol.
+
+        Args:
+            symbol: Ticker symbol
+            period: yfinance period string (e.g. '1y', '2y', '5y')
+
+        Returns:
+            DataFrame with Date, Open, High, Low, Close, Volume columns
+        """
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period=period, interval='1d')
+            if df.empty:
+                print(f"  No historical data returned for {symbol}")
+                return pd.DataFrame()
+            # Keep only OHLCV columns and reset the DatetimeIndex to a column
+            df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
+            df.index = df.index.tz_localize(None)  # drop tz for clean CSV dates
+            df.index.name = 'Date'
+            return df
+        except Exception as e:
+            print(f"  Error fetching OHLCV for {symbol}: {e}")
+            return pd.DataFrame()
+
+    def _data_dir(self) -> str:
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data')
+
+    def fetch_all_historical(self, period: str = '1y', data_dir: str = None) -> Dict[str, str]:
+        """Download daily OHLCV for every tracked asset and save as CSV.
+
+        Args:
+            period: yfinance period string (default '1y')
+            data_dir: Directory to write CSVs into (default: <project>/data/)
+
+        Returns:
+            Dict mapping symbol -> csv file path
+        """
+        if data_dir is None:
+            data_dir = self._data_dir()
+        os.makedirs(data_dir, exist_ok=True)
+
+        results = {}
+        all_assets = self.assets + self.commodities
+        for symbol in all_assets:
+            print(f"Fetching {period} daily OHLCV for {symbol}...")
+            df = self.fetch_historical_ohlcv(symbol, period=period)
+            if df.empty:
+                continue
+            path = os.path.join(data_dir, f"{symbol}.csv")
+            df.to_csv(path)
+            results[symbol] = path
+            print(f"  {symbol}: {len(df)} rows -> {path}")
+        return results
+
+    def update_historical(self, data_dir: str = None) -> Dict[str, int]:
+        """Append new trading days to existing OHLCV CSVs.
+
+        Reads each CSV, finds the last date, fetches recent data from
+        yfinance, and appends only rows newer than what we already have.
+        If a CSV doesn't exist yet, downloads the full year.
+
+        Returns:
+            Dict mapping symbol -> number of new rows appended
+        """
+        if data_dir is None:
+            data_dir = self._data_dir()
+        os.makedirs(data_dir, exist_ok=True)
+
+        updated = {}
+        all_assets = self.assets + self.commodities
+        for symbol in all_assets:
+            path = os.path.join(data_dir, f"{symbol}.csv")
+            try:
+                if not os.path.exists(path):
+                    # No file yet — do a full 1y download
+                    print(f"  {symbol}: no CSV found, fetching 1y...")
+                    df = self.fetch_historical_ohlcv(symbol, period='1y')
+                    if not df.empty:
+                        df.to_csv(path)
+                        updated[symbol] = len(df)
+                        print(f"  {symbol}: wrote {len(df)} rows (new file)")
+                    continue
+
+                existing = pd.read_csv(path, parse_dates=['Date'], index_col='Date')
+                last_date = existing.index.max()
+
+                # Fetch last 5 trading days — enough to cover weekends/holidays
+                fresh = self.fetch_historical_ohlcv(symbol, period='5d')
+                if fresh.empty:
+                    updated[symbol] = 0
+                    continue
+
+                new_rows = fresh[fresh.index > last_date]
+                if new_rows.empty:
+                    updated[symbol] = 0
+                    continue
+
+                combined = pd.concat([existing, new_rows])
+                combined.to_csv(path)
+                updated[symbol] = len(new_rows)
+                print(f"  {symbol}: +{len(new_rows)} rows (through {new_rows.index.max().date()})")
+
+            except Exception as e:
+                print(f"  {symbol}: error updating — {e}")
+                updated[symbol] = 0
+
+        return updated

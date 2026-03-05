@@ -17,7 +17,7 @@ class SlackNotifier:
             return
 
         try:
-            client = slack_sdk.WebClient(token=self.token)
+            client = WebClient(token=self.token)
 
             # Format alert message
             insights_text = "\n".join([
@@ -70,59 +70,58 @@ class SlackNotifier:
             print(f"Error sending Slack alert: {e}")
 
     def send_update(self, data: Dict):
-        """Send medium priority updates"""
+        """Send a macro briefing to Slack."""
         if not self.token or not self.channel:
             print("Skipping Slack update: token not configured")
             return
 
         try:
-            client = slack_sdk.WebClient(token=self.token)
+            client = WebClient(token=self.token)
 
-            insights_text = "\n".join([
-                f"📈 <{i.get('link', '#')}|{i.get('title', 'No title')}> - {i.get('description', '')}\n"
-                f"   Previous Price: ${i.get('previous_price', 'N/A')}"
-                for i in data.get('insights', [])[:10]
-            ])
+            briefing = data.get('briefing', '')
+            sources = data.get('sources', [])
 
+            # Build blocks: header, briefing paragraphs, sources
             blocks = [
                 {
                     "type": "header",
                     "text": {
                         "type": "plain_text",
-                        "text": data.get('title', '📈 UPDATE')
+                        "text": f"📊 Macro Briefing — {datetime.now().strftime('%b %d, %H:%M')}"
                     }
                 },
-                {
-                    "type": "section",
-                    "fields": [
-                        {
-                            "type": "mrkdwn",
-                            "text": f"*Insights Count:*\n{len(data.get('insights', []))}"
-                        },
-                        {
-                            "type": "mrkdwn",
-                            "text": f"*Report Type:*\n{data.get('report_type', 'update')}"
-                        }
-                    ]
-                },
-                {
-                    "type": "divider"
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"{insights_text[:2000]}"
-                    }
-                }
             ]
+
+            # Split briefing into sections to stay under Slack's 3000-char block limit
+            paragraphs = [p.strip() for p in briefing.split('\n') if p.strip()]
+            chunk = ""
+            for para in paragraphs:
+                if len(chunk) + len(para) + 2 > 2900:
+                    blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk}})
+                    chunk = para
+                else:
+                    chunk = f"{chunk}\n\n{para}" if chunk else para
+            if chunk:
+                blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk}})
+
+            # Sources
+            if sources:
+                blocks.append({"type": "divider"})
+                source_lines = "\n".join(
+                    f"• <{s.get('link', '#')}|{s.get('title', 'Source')}>"
+                    for s in sources[:8]
+                )
+                blocks.append({
+                    "type": "context",
+                    "elements": [{"type": "mrkdwn", "text": source_lines[:3000]}]
+                })
 
             client.chat_postMessage(
                 channel=self.channel,
                 blocks=blocks,
-                text=data.get('title', '📈 UPDATE')
+                text=briefing[:500],  # fallback for notifications
             )
-            print("✓ Medium priority update sent to Slack")
+            print("✓ Briefing sent to Slack")
 
         except Exception as e:
             print(f"Error sending Slack update: {e}")
@@ -134,7 +133,7 @@ class SlackNotifier:
             return
 
         try:
-            client = slack_sdk.WebClient(token=self.token)
+            client = WebClient(token=self.token)
 
             # Format insights
             insights_text = "\n".join([

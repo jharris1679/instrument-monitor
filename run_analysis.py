@@ -28,8 +28,12 @@ def main():
     print(f"{'Symbol':<6} {'Price':>10} {'Chg%':>7} {'SMA50':>10} {'SMA200':>10}")
     print("-" * 47)
     for item in market_data:
-        print(f"{item['symbol']:<6} {item['price']:>10.2f} {(item.get('change_percent') or 0):>+6.2f}% "
-              f"{(item.get('sma_50') or 0):>10.2f} {(item.get('sma_200') or 0):>10.2f}")
+        if item.get('price') is not None:
+            print(f"{item['symbol']:<6} {item['price']:>10.2f} {(item.get('change_percent') or 0):>+6.2f}% "
+                  f"{(item.get('sma_50') or 0):>10.2f} {(item.get('sma_200') or 0):>10.2f}")
+        else:
+            print(f"{item['symbol']:<6} {'NO DATA':>10} {'—':>7} "
+                  f"{(item.get('sma_50') or 0):>10.2f} {(item.get('sma_200') or 0):>10.2f}")
 
     # Generate briefing
     print(f"\n{'=' * COLS}")

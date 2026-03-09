@@ -1,4 +1,5 @@
 import os
+import time
 import yfinance as yf
 from typing import List, Dict
 import pandas as pd
@@ -24,48 +25,91 @@ class MarketDataFetcher:
         except Exception as e:
             print(f"Error loading config: {e}")
 
+    def _fetch_symbol(self, symbol: str) -> Dict | None:
+        """Fetch market data for a single symbol. Returns dict or None on failure."""
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.info
+
+            if info and (info.get('currentPrice') or info.get('regularMarketPrice')):
+                asset_type = self._determine_asset_type(symbol)
+                current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+                daily_change = info.get('regularMarketChange')
+                daily_change_pct = info.get('regularMarketChangePercent')
+
+                result = {
+                    "symbol": symbol,
+                    "asset_type": asset_type,
+                    "price": current_price,
+                    "change": daily_change,
+                    "change_percent": daily_change_pct,
+                    "high": info.get('dayHigh'),
+                    "low": info.get('dayLow'),
+                    "volume": info.get('volume'),
+                    "market_cap": info.get('marketCap'),
+                    "52_week_high": info.get('fiftyTwoWeekHigh'),
+                    "52_week_low": info.get('fiftyTwoWeekLow'),
+                    "last_updated": datetime.now().isoformat()
+                }
+
+                # Fetch and calculate historical metrics
+                if asset_type != 'commodity':
+                    historical_data = self._calculate_historical_metrics(symbol, current_price, info.get('regularMarketVolume', 0))
+                    result.update(historical_data)
+
+                # Add simple moving averages from stored OHLCV data
+                result.update(self.calculate_smas(symbol))
+
+                return result
+        except Exception as e:
+            print(f"Error fetching {symbol}: {e}")
+        return None
+
     def fetch_all(self) -> List[Dict]:
-        """Fetch market data for all assets"""
+        """Fetch market data for all assets with retry on failures."""
         all_data = []
         all_assets = self.assets + self.commodities
+        fetched_symbols = set()
 
+        # First pass
         for symbol in all_assets:
-            try:
-                ticker = yf.Ticker(symbol)
-                info = ticker.info
+            result = self._fetch_symbol(symbol)
+            if result:
+                all_data.append(result)
+                fetched_symbols.add(symbol)
 
-                if info and info.get('currentPrice') or info.get('regularMarketPrice'):
-                    asset_type = self._determine_asset_type(symbol)
-                    current_price = info.get('currentPrice') or info.get('regularMarketPrice')
-                    daily_change = info.get('regularMarketChange')
-                    daily_change_pct = info.get('regularMarketChangePercent')
-
-                    result = {
-                        "symbol": symbol,
-                        "asset_type": asset_type,
-                        "price": current_price,
-                        "change": daily_change,
-                        "change_percent": daily_change_pct,
-                        "high": info.get('dayHigh'),
-                        "low": info.get('dayLow'),
-                        "volume": info.get('volume'),
-                        "market_cap": info.get('marketCap'),
-                        "52_week_high": info.get('fiftyTwoWeekHigh'),
-                        "52_week_low": info.get('fiftyTwoWeekLow'),
-                        "last_updated": datetime.now().isoformat()
-                    }
-
-                    # Fetch and calculate historical metrics
-                    if asset_type != 'commodity':
-                        historical_data = self._calculate_historical_metrics(symbol, current_price, info.get('regularMarketVolume', 0))
-                        result.update(historical_data)
-
-                    # Add simple moving averages from stored OHLCV data
-                    result.update(self.calculate_smas(symbol))
-
+        # Retry missing symbols with backoff
+        missing = [s for s in all_assets if s not in fetched_symbols]
+        retry_delays = [5, 15]
+        for attempt, delay in enumerate(retry_delays, 1):
+            if not missing:
+                break
+            print(f"Retrying {len(missing)} failed symbols (attempt {attempt+1}, backoff {delay}s)...")
+            time.sleep(delay)
+            still_missing = []
+            for symbol in missing:
+                result = self._fetch_symbol(symbol)
+                if result:
                     all_data.append(result)
-            except Exception as e:
-                print(f"Error fetching {symbol}: {e}")
+                    fetched_symbols.add(symbol)
+                else:
+                    still_missing.append(symbol)
+            missing = still_missing
+
+        # Stub entries for symbols that failed all attempts
+        for symbol in missing:
+            print(f"All retries failed for {symbol}, adding stub entry")
+            stub = {
+                "symbol": symbol,
+                "asset_type": self._determine_asset_type(symbol),
+                "price": None,
+                "change": None,
+                "change_percent": None,
+                "fetch_error": f"Failed to fetch after {len(retry_delays)+1} attempts",
+            }
+            # Still populate SMAs from local CSVs
+            stub.update(self.calculate_smas(symbol))
+            all_data.append(stub)
 
         return all_data
 

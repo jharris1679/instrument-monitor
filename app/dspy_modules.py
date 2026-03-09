@@ -204,18 +204,31 @@ class BriefingSignature(dspy.Signature):
     any contradictions, (3) one line on what to watch. Reference news articles
     only when they directly drive the narrative.
 
+    CRITICAL: The `price_table` field contains the ACTUAL current prices. You
+    MUST use these exact prices in your briefing and opportunities. Do NOT
+    invent or guess prices. Every price you cite must match the price_table.
+
     You receive previous briefings for narrative continuity — reference how
     themes are evolving, whether prior calls played out, and what changed.
     Do NOT repeat the same analysis; build on it.
 
-    End with "Opportunities:" followed by exactly 3 lines:
-    - 1W: [specific instrument + direction + reasoning in one sentence]
-    - 1M: [specific instrument + direction + reasoning in one sentence]
-    - 3M: [specific instrument + direction + reasoning in one sentence]
-    Be concrete — name the ticker, give a price target or level, explain why."""
+    End with "Opportunities:" — exactly 3 lines:
+    - 1W: [buy/sell] [ticker] [strike] [call/put] [expiry] — [structure] — [reasoning]
+    - 1M: [buy/sell] [ticker] [strike] [call/put] [expiry] — [structure] — [reasoning]
+    - 3M: [buy/sell] [ticker] [strike] [call/put] [expiry] — [structure] — [reasoning]
+
+    Examples:
+      1W: Buy SPY 680c exp 3/14 — single leg — momentum above 50-day SMA
+      1M: Sell TLT 88/85 put spread exp 4/17 — bull put spread — yields stabilizing near 200-day
+      3M: Buy GLD 500c exp 6/20 — single leg — gold breakout on inflation persistence
+
+    Do NOT recommend options on assets with NO DATA in price_table."""
 
     analysis: str = dspy.InputField(
         desc="Raw macro analysis with price data and cross-asset signals"
+    )
+    price_table: str = dspy.InputField(
+        desc="GROUND TRUTH current prices — use ONLY these prices in your briefing. Format: symbol | price | change% | sma50 | sma200"
     )
     news_data: str = dspy.InputField(
         desc="JSON array of news articles with title, link, summary, source"
@@ -225,7 +238,7 @@ class BriefingSignature(dspy.Signature):
     )
 
     briefing: str = dspy.OutputField(
-        desc="2-3 short paragraphs (150-250 words) + Opportunities section with 1W/1M/3M calls. Dense, opinionated, with specific prices. No bullet points in the prose section."
+        desc="2-3 short paragraphs (150-250 words) + Opportunities section with 1W/1M/3M options calls (buy/sell, strike, call/put, expiry, structure). Dense, opinionated. All prices must match price_table."
     )
     sources: str = dspy.OutputField(
         desc='JSON array of referenced articles: [{"title": "...", "link": "..."}]'
@@ -263,6 +276,24 @@ class MarketInsightGenerator(dspy.Module):
         _db = create_market_db(market_data, news_data, data_dir, intraday=intraday)
 
         try:
+            # Build ground-truth price table for Phase 2 (all assets)
+            price_lines = ["symbol | price | change% | sma50 | sma200"]
+            for m in market_data:
+                if m.get("price") is not None:
+                    price_lines.append(
+                        f"{m['symbol']} | {m['price']:.2f} | "
+                        f"{(m.get('change_percent') or 0):+.2f}% | "
+                        f"{(m.get('sma_50') or 0):.2f} | "
+                        f"{(m.get('sma_200') or 0):.2f}"
+                    )
+                else:
+                    price_lines.append(
+                        f"{m['symbol']} | NO DATA | — | "
+                        f"{(m.get('sma_50') or 0):.2f} | "
+                        f"{(m.get('sma_200') or 0):.2f}"
+                    )
+            price_table = "\n".join(price_lines)
+
             # Phase 1: RLM explores data via SQL, produces macro analysis
             exploration = self.explore(db_schema=DB_SCHEMA)
             analysis_text = getattr(exploration, "analysis", "")
@@ -280,6 +311,7 @@ class MarketInsightGenerator(dspy.Module):
             news_json = json.dumps(news_data[:15], default=str)
             result = self.synthesize(
                 analysis=analysis_text,
+                price_table=price_table,
                 news_data=news_json,
                 prior_briefings=prior_briefings or "No prior briefings yet.",
             )

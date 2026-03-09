@@ -298,3 +298,32 @@ class MarketDataFetcher:
                 updated[symbol] = 0
 
         return updated
+
+    def fetch_intraday(self, interval: str = '5m') -> List[Dict]:
+        """Fetch today's intraday bars for all tracked assets.
+
+        Returns list of dicts with symbol, time, open, high, low, close, volume.
+        """
+        all_assets = self.assets + self.commodities
+        rows = []
+        for symbol in all_assets:
+            try:
+                ticker = yf.Ticker(symbol)
+                df = ticker.history(period='1d', interval=interval)
+                if df.empty:
+                    continue
+                df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
+                df.index = df.index.tz_localize(None)
+                for ts, row in df.iterrows():
+                    rows.append({
+                        'symbol': symbol,
+                        'time': ts,
+                        'open': row['Open'],
+                        'high': row['High'],
+                        'low': row['Low'],
+                        'close': row['Close'],
+                        'volume': int(row['Volume']),
+                    })
+            except Exception as e:
+                print(f"  Error fetching intraday for {symbol}: {e}")
+        return rows

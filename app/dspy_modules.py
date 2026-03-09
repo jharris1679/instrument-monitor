@@ -47,6 +47,7 @@ def create_market_db(
     market_data: list,
     news: list,
     data_dir: str,
+    intraday: list | None = None,
 ) -> duckdb.DuckDBPyConnection:
     """Create an in-memory DuckDB with market_snapshot, ohlcv, and news tables."""
     db = duckdb.connect(":memory:")
@@ -124,11 +125,22 @@ def create_market_db(
             "source VARCHAR, published VARCHAR)"
         )
 
+    # -- intraday (5-min bars for today, if provided) --
+    if intraday:
+        df_intra = pd.DataFrame(intraday)
+        db.execute("CREATE TABLE intraday AS SELECT * FROM df_intra")
+    else:
+        db.execute(
+            "CREATE TABLE intraday ("
+            "symbol VARCHAR, time TIMESTAMP, open DOUBLE, high DOUBLE, "
+            "low DOUBLE, close DOUBLE, volume BIGINT)"
+        )
+
     return db
 
 
 # ---------------------------------------------------------------------------
-# Schema description passed to the RLM (compact, ~500 chars)
+# Schema description passed to the RLM (compact, ~600 chars)
 # ---------------------------------------------------------------------------
 
 DB_SCHEMA = (
@@ -137,11 +149,14 @@ DB_SCHEMA = (
     "sma_8, sma_21, sma_50, sma_100, sma_200, high_52w, low_52w, trend_7d\n"
     "  ohlcv: symbol, date, open, high, low, close, volume  "
     "(daily OHLCV history for all tracked symbols)\n"
+    "  intraday: symbol, time, open, high, low, close, volume  "
+    "(today's 5-min bars — use to see how the trading day is unfolding)\n"
     "  news: title, summary, link, source, published\n"
     "\n"
     "Example queries:\n"
     "  query_db(\"SELECT symbol, price, change_pct FROM market_snapshot ORDER BY change_pct DESC\")\n"
     "  query_db(\"SELECT * FROM ohlcv WHERE symbol='SPY' ORDER BY date DESC LIMIT 10\")\n"
+    "  query_db(\"SELECT symbol, time, close FROM intraday WHERE symbol='SPY' ORDER BY time\")\n"
     "  query_db(\"SELECT title, source FROM news LIMIT 5\")\n"
 )
 
@@ -179,37 +194,41 @@ class AnalysisSignature(dspy.Signature):
 # ---------------------------------------------------------------------------
 
 class BriefingSignature(dspy.Signature):
-    """You are writing a daily macro briefing for a sophisticated reader.
+    """Write a concise daily macro briefing — 2-3 short paragraphs, ~150-250 words,
+    followed by 3 opportunity calls.
 
-    Synthesize the raw analysis into polished prose — NOT bullet points, NOT
-    a list of findings. Write 3-5 paragraphs that paint a picture of what is
-    happening in the world and how markets are reacting.
+    Be dense and direct. Every sentence should carry information. No filler,
+    no throat-clearing, no hedging. Use actual prices and levels.
 
-    Structure your thinking as:
-    - Open with the dominant macro theme of the day (what is the world doing?)
-    - Weave in how specific asset classes are confirming or contradicting the
-      narrative — use actual prices and levels, not vague direction words
-    - Highlight anything surprising or contradictory — where is the market
-      telling a different story than the headlines?
-    - Close with what's worth watching — not trading recommendations, but
-      the tensions or inflection points that could shift the picture
+    Structure: (1) dominant theme + key movers, (2) cross-asset signals and
+    any contradictions, (3) one line on what to watch. Reference news articles
+    only when they directly drive the narrative.
 
-    Write in a style that is direct, thought-provoking, and slightly opinionated.
-    Avoid hedging language. Take a stance. Reference specific news articles
-    when they drive the narrative."""
+    You receive previous briefings for narrative continuity — reference how
+    themes are evolving, whether prior calls played out, and what changed.
+    Do NOT repeat the same analysis; build on it.
+
+    End with "Opportunities:" followed by exactly 3 lines:
+    - 1W: [specific instrument + direction + reasoning in one sentence]
+    - 1M: [specific instrument + direction + reasoning in one sentence]
+    - 3M: [specific instrument + direction + reasoning in one sentence]
+    Be concrete — name the ticker, give a price target or level, explain why."""
 
     analysis: str = dspy.InputField(
-        desc="Raw macro analysis text covering geopolitics, monetary policy, and cross-asset signals"
+        desc="Raw macro analysis with price data and cross-asset signals"
     )
     news_data: str = dspy.InputField(
-        desc="JSON array of news articles with title, link, summary, source — reference these by title when they inform the briefing"
+        desc="JSON array of news articles with title, link, summary, source"
+    )
+    prior_briefings: str = dspy.InputField(
+        desc="Previous 3 briefings (most recent first) for narrative continuity. May be empty if no prior briefings exist."
     )
 
     briefing: str = dspy.OutputField(
-        desc="3-5 paragraphs of prose. A macro snapshot of the world through the lens of markets. Direct, opinionated, thought-provoking. Reference specific prices, SMA levels, and news articles."
+        desc="2-3 short paragraphs (150-250 words) + Opportunities section with 1W/1M/3M calls. Dense, opinionated, with specific prices. No bullet points in the prose section."
     )
     sources: str = dspy.OutputField(
-        desc='JSON array of news articles referenced in the briefing. Example: [{"title": "Fed signals patience on rate cuts", "link": "https://..."}]. Only include articles actually mentioned or drawn from in the text.'
+        desc='JSON array of referenced articles: [{"title": "...", "link": "..."}]'
     )
 
 
@@ -235,11 +254,13 @@ class MarketInsightGenerator(dspy.Module):
         market_data: list,
         news_data: list,
         data_dir: str,
+        intraday: list | None = None,
+        prior_briefings: str = "",
     ) -> dspy.Prediction:
         global _db
 
         # Build the DuckDB and make it available to query_db()
-        _db = create_market_db(market_data, news_data, data_dir)
+        _db = create_market_db(market_data, news_data, data_dir, intraday=intraday)
 
         try:
             # Phase 1: RLM explores data via SQL, produces macro analysis
@@ -257,7 +278,11 @@ class MarketInsightGenerator(dspy.Module):
 
             # Phase 2: ChainOfThought synthesizes prose briefing
             news_json = json.dumps(news_data[:15], default=str)
-            result = self.synthesize(analysis=analysis_text, news_data=news_json)
+            result = self.synthesize(
+                analysis=analysis_text,
+                news_data=news_json,
+                prior_briefings=prior_briefings or "No prior briefings yet.",
+            )
 
             # Validate sources JSON
             try:

@@ -16,7 +16,7 @@ class MarketMonitor:
         self.insight_generator = InsightGenerator()
         self.slack_notifier = SlackNotifier()
 
-    def run_report(self):
+    def run_report(self, include_intraday: bool = False):
         """Generate and send a market report"""
         print(f"\n{'='*50}")
         print(f"Generating Report at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -26,6 +26,13 @@ class MarketMonitor:
         print("Fetching market data...")
         market_data = self.market_data.fetch_all()
         print(f"✓ Fetched {len(market_data)} asset prices")
+
+        # Fetch intraday data for midday runs
+        intraday = None
+        if include_intraday:
+            print("\nFetching intraday bars...")
+            intraday = self.market_data.fetch_intraday()
+            print(f"✓ Fetched {len(intraday)} intraday bars")
 
         # Fetch RSS news
         print("\nFetching news...")
@@ -38,6 +45,7 @@ class MarketMonitor:
         result = self.insight_generator.generate_briefing(
             market_data=market_data,
             news=news,
+            intraday=intraday,
         )
 
         briefing = result.get('briefing', '')
@@ -72,9 +80,9 @@ class MarketMonitor:
     def _is_weekend(self):
         return date.today().weekday() >= 5  # 5=Saturday, 6=Sunday
 
-    def _run_weekday_report(self):
+    def _run_weekday_report(self, include_intraday: bool = False):
         if not self._is_weekend():
-            self.run_report()
+            self.run_report(include_intraday=include_intraday)
 
     def _run_weekend_report(self):
         if self._is_weekend():
@@ -90,10 +98,10 @@ class MarketMonitor:
         # Update historical data once daily before markets open
         schedule.every().day.at("08:00").do(self.update_historical_data)
 
-        # Weekday reports (Mon-Fri): 9am, 12pm, 3pm, 9pm
+        # Weekday reports (Mon-Fri): 9am, 12pm (intraday), 3pm (intraday), 9pm
         schedule.every().day.at("09:00").do(self._run_weekday_report)
-        schedule.every().day.at("12:00").do(self._run_weekday_report)
-        schedule.every().day.at("15:00").do(self._run_weekday_report)
+        schedule.every().day.at("12:00").do(self._run_weekday_report, include_intraday=True)
+        schedule.every().day.at("15:00").do(self._run_weekday_report, include_intraday=True)
         schedule.every().day.at("21:00").do(self._run_weekday_report)
 
         # Weekend reports (Sat-Sun): 9am only

@@ -16,10 +16,11 @@ class MarketMonitor:
         self.insight_generator = InsightGenerator()
         self.slack_notifier = SlackNotifier()
 
-    def run_report(self, include_intraday: bool = False):
+    def run_report(self, include_intraday: bool = False, session_context: str = ""):
         """Generate and send a market report"""
         print(f"\n{'='*50}")
         print(f"Generating Report at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"Session context: {session_context or 'none'}")
         print(f"{'='*50}\n")
 
         # Fetch market data
@@ -46,6 +47,7 @@ class MarketMonitor:
             market_data=market_data,
             news=news,
             intraday=intraday,
+            session_context=session_context,
         )
 
         briefing = result.get('briefing', '')
@@ -80,13 +82,13 @@ class MarketMonitor:
     def _is_weekend(self):
         return date.today().weekday() >= 5  # 5=Saturday, 6=Sunday
 
-    def _run_weekday_report(self, include_intraday: bool = False):
+    def _run_weekday_report(self, include_intraday: bool = False, session_context: str = ""):
         if not self._is_weekend():
-            self.run_report(include_intraday=include_intraday)
+            self.run_report(include_intraday=include_intraday, session_context=session_context)
 
     def _run_weekend_report(self):
         if self._is_weekend():
-            self.run_report()
+            self.run_report(session_context="WEEKEND. Markets closed. Prices are Friday's close. Focus on newsflow and positioning for Monday.")
 
     def start_scheduled_reports(self):
         """Start the scheduled reporting system"""
@@ -99,10 +101,24 @@ class MarketMonitor:
         schedule.every().day.at("08:00").do(self.update_historical_data)
 
         # Weekday reports (Mon-Fri): 9am, 12pm (intraday), 3pm (intraday), 9pm
-        schedule.every().day.at("09:00").do(self._run_weekday_report)
-        schedule.every().day.at("12:00").do(self._run_weekday_report, include_intraday=True)
-        schedule.every().day.at("15:00").do(self._run_weekday_report, include_intraday=True)
-        schedule.every().day.at("21:00").do(self._run_weekday_report)
+        schedule.every().day.at("09:00").do(
+            self._run_weekday_report,
+            session_context="PRE-MARKET (9am). US equity markets open at 9:30am. Prices are yesterday's close.",
+        )
+        schedule.every().day.at("12:00").do(
+            self._run_weekday_report,
+            include_intraday=True,
+            session_context="INTRADAY (12pm). Markets are open. Prices are live.",
+        )
+        schedule.every().day.at("15:00").do(
+            self._run_weekday_report,
+            include_intraday=True,
+            session_context="INTRADAY (3pm). Markets close at 4pm. Prices are live.",
+        )
+        schedule.every().day.at("21:00").do(
+            self._run_weekday_report,
+            session_context="POST-MARKET (9pm). Markets closed at 4pm. Prices are today's close.",
+        )
 
         # Weekend reports (Sat-Sun): 9am only
         schedule.every().day.at("09:00").do(self._run_weekend_report)

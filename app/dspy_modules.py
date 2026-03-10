@@ -177,7 +177,7 @@ class AnalysisSignature(dspy.Signature):
     3. query_db("SELECT * FROM ohlcv WHERE symbol='SPY' ORDER BY date DESC LIMIT 5")
     4. Synthesize: cross-asset signals, geopolitics, risk appetite, Fed/policy
 
-    Focus: SPY/QQQ/IWM (equities), TLT (bonds), GLD/GOLD (gold), CORN (commodities).
+    Focus: SPY/QQQ/IWM (equities), TLT (bonds), GLD (gold), CORN (commodities).
     Use actual prices, SMA levels, percentage moves. Connect headlines to price action."""
 
     db_schema: str = dspy.InputField(
@@ -212,6 +212,15 @@ class BriefingSignature(dspy.Signature):
     themes are evolving, whether prior calls played out, and what changed.
     Do NOT repeat the same analysis; build on it.
 
+    The `session_context` field tells you the market session. Adapt accordingly:
+    - PRE-MARKET: Prices are prior close. Lead with overnight newsflow, geopolitical
+      developments, and futures signals. Frame price levels as "yesterday's close" not
+      "current". Focus on what to watch for at the open.
+    - INTRADAY: Prices are live. Focus on price action, intraday momentum, and how
+      the session is unfolding relative to key levels.
+    - POST-MARKET: Prices are today's close. Summarize the session, what drove it,
+      and set up the next day. Lean on newsflow for forward-looking framing.
+
     End with "Opportunities:" — exactly 3 lines:
     - 1W: [buy/sell] [ticker] [strike] [call/put] [expiry] — [structure] — [reasoning]
     - 1M: [buy/sell] [ticker] [strike] [call/put] [expiry] — [structure] — [reasoning]
@@ -235,6 +244,9 @@ class BriefingSignature(dspy.Signature):
     )
     prior_briefings: str = dspy.InputField(
         desc="Previous 3 briefings (most recent first) for narrative continuity. May be empty if no prior briefings exist."
+    )
+    session_context: str = dspy.InputField(
+        desc="Market session context: pre-market, intraday, or post-market. Guides briefing emphasis."
     )
 
     briefing: str = dspy.OutputField(
@@ -269,6 +281,7 @@ class MarketInsightGenerator(dspy.Module):
         data_dir: str,
         intraday: list | None = None,
         prior_briefings: str = "",
+        session_context: str = "",
     ) -> dspy.Prediction:
         global _db
 
@@ -314,6 +327,7 @@ class MarketInsightGenerator(dspy.Module):
                 price_table=price_table,
                 news_data=news_json,
                 prior_briefings=prior_briefings or "No prior briefings yet.",
+                session_context=session_context or "No session context provided.",
             )
 
             # Validate sources JSON

@@ -74,7 +74,8 @@ class InsightGenerator:
             print(f"Warning: could not save briefing: {e}")
 
     def generate_briefing(self, market_data: List[Dict], news: List[Dict],
-                          intraday: List[Dict] | None = None) -> Dict:
+                          intraday: List[Dict] | None = None,
+                          session_context: str = "") -> Dict:
         """Generate a macro briefing from market data and news using DSPy.
 
         Returns dict with 'briefing' (prose text) and 'sources' (list of articles).
@@ -89,6 +90,7 @@ class InsightGenerator:
                 data_dir=data_dir,
                 intraday=intraday,
                 prior_briefings=prior_briefings,
+                session_context=session_context,
             )
 
             briefing = getattr(result, 'briefing', '')

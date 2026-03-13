@@ -9,6 +9,7 @@ import dspy
 from dotenv import load_dotenv
 
 from app.dspy_modules import MarketInsightGenerator
+from app.market_data_fetcher import MarketDataFetcher
 
 # Load environment variables from .env file
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env'))
@@ -45,6 +46,7 @@ _BRIEFINGS_DIR = str(Path(__file__).resolve().parent.parent / "briefings")
 class InsightGenerator:
     def __init__(self):
         self.insight_module = MarketInsightGenerator()
+        self.fetcher = MarketDataFetcher()
         os.makedirs(_BRIEFINGS_DIR, exist_ok=True)
 
     def _load_prior_briefings(self, count: int = 3) -> str:
@@ -91,10 +93,12 @@ class InsightGenerator:
                 intraday=intraday,
                 prior_briefings=prior_briefings,
                 session_context=session_context,
+                fetcher=self.fetcher,
             )
 
             briefing = getattr(result, 'briefing', '')
             sources = json.loads(getattr(result, 'sources', '[]'))
+            tracked = getattr(result, 'tracked_instruments', [])
 
             if not briefing or len(briefing) < 50:
                 print("DSPy returned empty briefing, falling back to basic summary")
@@ -103,6 +107,7 @@ class InsightGenerator:
             output = {
                 'briefing': briefing,
                 'sources': sources,
+                'tracked_instruments': tracked,
                 'generated_at': datetime.now().isoformat(),
             }
             self._save_briefing(output)

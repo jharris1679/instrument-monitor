@@ -63,6 +63,10 @@ class MarketMonitor:
             "report_type": "briefing"
         })
 
+        tracked = result.get('tracked_instruments', [])
+        if tracked:
+            print(f"  New instruments tracked: {', '.join(tracked)}")
+
         print(f"\n✓ Briefing sent ({len(briefing)} chars, {len(sources)} sources).")
 
     def _get_trending_news(self, news: List[Dict]) -> List[Dict]:

@@ -12,6 +12,8 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 
 _db: duckdb.DuckDBPyConnection | None = None
+_fetcher = None  # MarketDataFetcher instance, set during forward()
+_tracked_this_session: list = []  # tickers added by track_instrument() during this run
 
 
 def query_db(sql: str) -> str:
@@ -41,6 +43,88 @@ def query_db(sql: str) -> str:
         return "\n".join(lines)
     except Exception as e:
         return f"SQL ERROR: {e}"
+
+
+def track_instrument(ticker: str) -> str:
+    """Fetch live data for a new ticker and add it to the analysis database.
+
+    Call this when news or your analysis references an asset NOT in the database
+    and having its price data would materially strengthen your analysis.
+    The instrument's current price and 3 months of daily history will be loaded
+    into market_snapshot and ohlcv, available for SQL queries immediately.
+
+    Args:
+        ticker: Yahoo Finance ticker symbol (e.g. 'URA', 'XLE', 'FXI')
+
+    Returns:
+        Summary of fetched data, or an error message.
+    """
+    ticker = ticker.strip().upper()
+    if _db is None or _fetcher is None:
+        return "ERROR: not available outside analysis phase"
+
+    # Check if already in DB
+    try:
+        existing = _db.execute(
+            "SELECT COUNT(*) FROM market_snapshot WHERE symbol = ?", [ticker]
+        ).fetchone()[0]
+        if existing:
+            return f"{ticker} is already in the database. Query it with query_db()."
+    except Exception:
+        pass
+
+    # Fetch current price
+    result = _fetcher._fetch_symbol(ticker)
+    if not result or result.get("price") is None:
+        return f"ERROR: could not fetch data for '{ticker}'. Check the ticker symbol."
+
+    # Insert into market_snapshot
+    row = pd.DataFrame([{
+        "symbol": ticker, "price": result.get("price"),
+        "change_pct": result.get("change_percent"),
+        "volume": result.get("volume"),
+        "sma_8": result.get("sma_8"), "sma_21": result.get("sma_21"),
+        "sma_50": result.get("sma_50"), "sma_100": result.get("sma_100"),
+        "sma_200": result.get("sma_200"),
+        "high_52w": result.get("52_week_high"), "low_52w": result.get("52_week_low"),
+        "trend_7d": str(result.get("7d_trend", "")),
+    }])
+    _db.execute("INSERT INTO market_snapshot SELECT * FROM row")
+
+    # Fetch and insert OHLCV history (3 months)
+    ohlcv = _fetcher.fetch_historical_ohlcv(ticker, period='3mo')
+    hist_rows = 0
+    if not ohlcv.empty:
+        ohlcv_df = ohlcv.reset_index().rename(columns={
+            "Date": "date", "Open": "open", "High": "high",
+            "Low": "low", "Close": "close", "Volume": "volume",
+        })
+        ohlcv_df["symbol"] = ticker
+        ohlcv_df = ohlcv_df[["symbol", "date", "open", "high", "low", "close", "volume"]]
+        _db.execute("INSERT INTO ohlcv SELECT * FROM ohlcv_df")
+        hist_rows = len(ohlcv_df)
+
+    _tracked_this_session.append(ticker)
+
+    return (
+        f"Added {ticker}: ${result['price']:.2f} "
+        f"({(result.get('change_percent') or 0):+.2f}%), "
+        f"{hist_rows} days of history. Now available in market_snapshot and ohlcv tables."
+    )
+
+
+def _save_supplementary(tickers: list, project_root: str):
+    """Append new tickers to supplementary_assets.txt."""
+    path = os.path.join(project_root, "supplementary_assets.txt")
+    existing = set()
+    if os.path.exists(path):
+        with open(path) as f:
+            existing = {line.strip().upper() for line in f if line.strip()}
+    new = [t for t in tickers if t not in existing]
+    if new:
+        with open(path, "a") as f:
+            for t in new:
+                f.write(f"{t}\n")
 
 
 def create_market_db(
@@ -178,7 +262,11 @@ class AnalysisSignature(dspy.Signature):
     4. Synthesize: cross-asset signals, geopolitics, risk appetite, Fed/policy
 
     Focus: SPY/QQQ/IWM (equities), TLT (bonds), GLD (gold), CORN (commodities).
-    Use actual prices, SMA levels, percentage moves. Connect headlines to price action."""
+    Use actual prices, SMA levels, percentage moves. Connect headlines to price action.
+
+    You have a second tool: track_instrument(ticker). If news or your analysis references
+    an asset NOT in the database, you can fetch it live. Use sparingly — only when the data
+    would materially strengthen your analysis. The instrument will be added to future tracking."""
 
     db_schema: str = dspy.InputField(
         desc="Database schema and example SQL queries for the query_db() tool"
@@ -266,7 +354,7 @@ class MarketInsightGenerator(dspy.Module):
         super().__init__()
         self.explore = dspy.RLM(
             AnalysisSignature,
-            tools=[query_db],
+            tools=[query_db, track_instrument],
             max_iterations=12,
             max_llm_calls=10,
             max_output_chars=10000,
@@ -282,32 +370,18 @@ class MarketInsightGenerator(dspy.Module):
         intraday: list | None = None,
         prior_briefings: str = "",
         session_context: str = "",
+        fetcher=None,
     ) -> dspy.Prediction:
-        global _db
+        global _db, _fetcher, _tracked_this_session
+        _tracked_this_session = []
+        _fetcher = fetcher
 
         # Build the DuckDB and make it available to query_db()
         _db = create_market_db(market_data, news_data, data_dir, intraday=intraday)
 
         try:
-            # Build ground-truth price table for Phase 2 (all assets)
-            price_lines = ["symbol | price | change% | sma50 | sma200"]
-            for m in market_data:
-                if m.get("price") is not None:
-                    price_lines.append(
-                        f"{m['symbol']} | {m['price']:.2f} | "
-                        f"{(m.get('change_percent') or 0):+.2f}% | "
-                        f"{(m.get('sma_50') or 0):.2f} | "
-                        f"{(m.get('sma_200') or 0):.2f}"
-                    )
-                else:
-                    price_lines.append(
-                        f"{m['symbol']} | NO DATA | — | "
-                        f"{(m.get('sma_50') or 0):.2f} | "
-                        f"{(m.get('sma_200') or 0):.2f}"
-                    )
-            price_table = "\n".join(price_lines)
-
             # Phase 1: RLM explores data via SQL, produces macro analysis
+            # (may call track_instrument() to add new tickers to the DB)
             exploration = self.explore(db_schema=DB_SCHEMA)
             analysis_text = getattr(exploration, "analysis", "")
 
@@ -319,6 +393,29 @@ class MarketInsightGenerator(dspy.Module):
                     if isinstance(entry, dict) and entry.get("output"):
                         parts.append(str(entry["output"]))
                 analysis_text = "\n".join(parts) if parts else "No analysis produced"
+
+            # Build ground-truth price table from DuckDB (includes any
+            # instruments the RLM added via track_instrument in Phase 1)
+            price_rows = _db.execute(
+                "SELECT symbol, price, change_pct, sma_50, sma_200 "
+                "FROM market_snapshot ORDER BY symbol"
+            ).fetchall()
+            price_lines = ["symbol | price | change% | sma50 | sma200"]
+            for sym, price, chg, s50, s200 in price_rows:
+                if price is not None:
+                    price_lines.append(
+                        f"{sym} | {price:.2f} | "
+                        f"{(chg or 0):+.2f}% | "
+                        f"{(s50 or 0):.2f} | "
+                        f"{(s200 or 0):.2f}"
+                    )
+                else:
+                    price_lines.append(
+                        f"{sym} | NO DATA | — | "
+                        f"{(s50 or 0):.2f} | "
+                        f"{(s200 or 0):.2f}"
+                    )
+            price_table = "\n".join(price_lines)
 
             # Phase 2: ChainOfThought synthesizes prose briefing
             news_json = json.dumps(news_data[:15], default=str)
@@ -336,7 +433,14 @@ class MarketInsightGenerator(dspy.Module):
             except (json.JSONDecodeError, TypeError):
                 result.sources = "[]"
 
+            # Persist any newly tracked instruments to supplementary_assets.txt
+            if _tracked_this_session:
+                project_root = os.path.dirname(data_dir)
+                _save_supplementary(_tracked_this_session, project_root)
+
+            result.tracked_instruments = list(_tracked_this_session)
             return result
         finally:
             _db.close()
             _db = None
+            _fetcher = None

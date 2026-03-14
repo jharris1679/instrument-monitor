@@ -227,7 +227,7 @@ def create_market_db(
 # Schema description passed to the RLM (compact, ~600 chars)
 # ---------------------------------------------------------------------------
 
-DB_SCHEMA = (
+_DB_SCHEMA_TEMPLATE = (
     "Tables in the database (query with query_db(sql)):\n"
     "  market_snapshot: symbol, price, change_pct, volume, "
     "sma_8, sma_21, sma_50, sma_100, sma_200, high_52w, low_52w, trend_7d\n"
@@ -237,6 +237,10 @@ DB_SCHEMA = (
     "(today's 5-min bars — use to see how the trading day is unfolding)\n"
     "  news: title, summary, link, source, published\n"
     "\n"
+    "Currently tracked symbols: {symbols}\n"
+    "These are the ONLY symbols in market_snapshot and ohlcv. If you need data\n"
+    "on any other ticker, call track_instrument(ticker) to fetch it live.\n"
+    "\n"
     "Example queries:\n"
     "  query_db(\"SELECT symbol, price, change_pct FROM market_snapshot ORDER BY change_pct DESC\")\n"
     "  query_db(\"SELECT * FROM ohlcv WHERE symbol='SPY' ORDER BY date DESC LIMIT 10\")\n"
@@ -245,28 +249,42 @@ DB_SCHEMA = (
 )
 
 
+def _build_db_schema(symbols: list[str]) -> str:
+    return _DB_SCHEMA_TEMPLATE.format(symbols=", ".join(symbols))
+
+
 # ---------------------------------------------------------------------------
 # Phase 1: RLM explores and analyzes (output is free-form text)
 # ---------------------------------------------------------------------------
 
 class AnalysisSignature(dspy.Signature):
-    """Macro strategist analyzing markets via SQL. Use query_db(sql) for ALL data access.
+    """Macro strategist analyzing markets via SQL.
+
+    You have TWO tools:
+      query_db(sql)             — query the market database
+      track_instrument(ticker)  — fetch live data for a NEW ticker not yet in the database
 
     IMPORTANT: Keep reasoning VERY brief (1-2 sentences). Write SHORT code blocks.
     Do NOT repeat data you already retrieved. Do NOT write long explanations.
 
-    Workflow — one query per iteration, stay concise:
+    Workflow — one tool call per iteration, stay concise:
     1. query_db("SELECT symbol, price, change_pct, sma_50, sma_200 FROM market_snapshot ORDER BY change_pct")
     2. query_db("SELECT title, source FROM news LIMIT 10")
     3. query_db("SELECT * FROM ohlcv WHERE symbol='SPY' ORDER BY date DESC LIMIT 5")
     4. Synthesize: cross-asset signals, geopolitics, risk appetite, Fed/policy
+    5. REFLECT: Do the news headlines or your analysis reference any asset, sector, or
+       commodity NOT in the tracked symbols list? Would having that data strengthen your
+       thesis or reveal a cross-asset signal? If yes, call track_instrument(ticker) to
+       fetch it, then query it. Examples: news about uranium → track_instrument("URA"),
+       China trade tensions → track_instrument("FXI"), oil spike → track_instrument("XLE").
+    6. Final synthesis incorporating any newly tracked data.
 
-    Focus: SPY/QQQ/IWM (equities), TLT (bonds), GLD (gold), CORN (commodities).
-    Use actual prices, SMA levels, percentage moves. Connect headlines to price action.
+    The db_schema field lists which symbols are currently tracked. Anything NOT in that
+    list requires track_instrument() before you can query it.
 
-    You have a second tool: track_instrument(ticker). If news or your analysis references
-    an asset NOT in the database, you can fetch it live. Use sparingly — only when the data
-    would materially strengthen your analysis. The instrument will be added to future tracking."""
+    Focus: SPY/QQQ/IWM (equities), TLT (bonds), GLD (gold), CORN (commodities),
+    plus any instruments you discover are relevant via news.
+    Use actual prices, SMA levels, percentage moves. Connect headlines to price action."""
 
     db_schema: str = dspy.InputField(
         desc="Database schema and example SQL queries for the query_db() tool"
@@ -380,9 +398,13 @@ class MarketInsightGenerator(dspy.Module):
         _db = create_market_db(market_data, news_data, data_dir, intraday=intraday)
 
         try:
+            # Build schema with tracked symbols so the RLM knows what's available
+            tracked_symbols = [m.get("symbol", "") for m in market_data if m.get("symbol")]
+            db_schema = _build_db_schema(tracked_symbols)
+
             # Phase 1: RLM explores data via SQL, produces macro analysis
             # (may call track_instrument() to add new tickers to the DB)
-            exploration = self.explore(db_schema=DB_SCHEMA)
+            exploration = self.explore(db_schema=db_schema)
             analysis_text = getattr(exploration, "analysis", "")
 
             # If RLM produced a trajectory but no clean analysis field,

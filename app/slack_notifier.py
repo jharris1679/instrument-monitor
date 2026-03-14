@@ -116,6 +116,17 @@ class SlackNotifier:
                     "elements": [{"type": "mrkdwn", "text": source_lines[:3000]}]
                 })
 
+            # Newly discovered instruments
+            tracked = data.get('tracked_instruments', [])
+            if tracked:
+                blocks.append({
+                    "type": "context",
+                    "elements": [{
+                        "type": "mrkdwn",
+                        "text": f"🔍 *New instruments discovered:* {', '.join(tracked)} — added to supplementary tracking"
+                    }]
+                })
+
             client.chat_postMessage(
                 channel=self.channel,
                 blocks=blocks,

@@ -52,6 +52,7 @@ class MarketMonitor:
 
         briefing = result.get('briefing', '')
         sources = result.get('sources', [])
+        tracked = result.get('tracked_instruments', [])
 
         # Send briefing to Slack
         print("\nSending briefing...")
@@ -59,11 +60,11 @@ class MarketMonitor:
             "title": "📊 Macro Briefing",
             "briefing": briefing,
             "sources": sources,
+            "tracked_instruments": tracked,
             "trending_news": trending_news,
             "report_type": "briefing"
         })
 
-        tracked = result.get('tracked_instruments', [])
         if tracked:
             print(f"  New instruments tracked: {', '.join(tracked)}")
 

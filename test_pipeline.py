@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-End-to-end test for asset monitoring pipeline
-Tests: RSS feeds → Market data → Insights generation
+End-to-end test for instrument monitor pipeline
+Tests: RSS feeds → Market data → Briefing generation
 """
-import json
 import os
 import sys
 from datetime import datetime
@@ -57,25 +56,35 @@ def test_pipeline():
     successful = [m for m in market_data if m.get('price') and m.get('price') != 'N/A']
     
     try:
-        insights = insights_generator.generate_insights(successful, valid_news, current_context='daily_report')
-        print(f"✓ Generated {len(insights)} insights")
+        result = insights_generator.generate_briefing(
+            market_data=successful,
+            news=valid_news,
+        )
+        briefing = result.get('briefing', '')
+        sources = result.get('sources', [])
+        tracked = result.get('tracked_instruments', [])
+        print(f"✓ Generated briefing ({len(briefing)} chars, {len(sources)} sources)")
 
-        if insights:
-            print("\n--- Sample Insights ---")
-            for i, insight in enumerate(insights[:5], 1):
-                print(f"\n{i}. [{insight.get('category', 'N/A')}] {insight.get('symbol', 'N/A')}")
-                print(f"   {insight.get('description', 'N/A')}")
-                print(f"   Impact: {insight.get('impact_score', 'N/A')}")
-                print(f"   Context: {insight.get('context', 'N/A')}")
+        if tracked:
+            print(f"  New instruments discovered: {', '.join(tracked)}")
+
+        if briefing:
+            print("\n--- Briefing Preview ---")
+            # Show first 500 chars
+            preview = briefing[:500]
+            if len(briefing) > 500:
+                preview += "..."
+            print(preview)
 
     except Exception as e:
-        print(f"✗ Error generating insights: {e}")
+        print(f"✗ Error generating briefing: {e}")
+        briefing = ''
 
     print(f"\n{'=' * 60}")
     print(f"Pipeline Test Complete")
     print(f"{'=' * 60}\n")
 
-    return {"status": "success", "rss_count": len(valid_news), "market_count": len(successful), "insight_count": len(insights)}
+    return {"status": "success", "rss_count": len(valid_news), "market_count": len(successful), "briefing_length": len(briefing)}
 
 
 if __name__ == "__main__":

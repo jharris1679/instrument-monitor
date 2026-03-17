@@ -98,17 +98,22 @@ class MarketMonitor:
     def start_scheduled_reports(self):
         """Start the scheduled reporting system"""
         print("Starting Market Monitor scheduler...")
-        print("Weekday reports: 9am, 12pm, 3pm, 9pm")
+        print("Weekday reports: 8am, 9:45am, 12pm, 3pm, 4:15pm, 9pm")
         print("Weekend reports: 9am")
         print("Historical OHLCV update: 8am daily")
 
         # Update historical data once daily before markets open
         schedule.every().day.at("08:00").do(self.update_historical_data)
 
-        # Weekday reports (Mon-Fri): 9am, 12pm (intraday), 3pm (intraday), 9pm
-        schedule.every().day.at("09:00").do(
+        # Weekday reports (Mon-Fri): 8am, 9:45am, 12pm (intraday), 3pm (intraday), 4:15pm (post-market), 9pm
+        schedule.every().day.at("08:00").do(
             self._run_weekday_report,
-            session_context="PRE-MARKET (9am). US equity markets open at 9:30am. Prices are yesterday's close.",
+            session_context="PRE-MARKET (8am). US equity markets open at 9:30am. Prices are yesterday's close.",
+        )
+        schedule.every().day.at("09:45").do(
+            self._run_weekday_report,
+            include_intraday=True,
+            session_context="INTRADAY (9:45am). Markets are open. Prices are live with minute-by-minute data.",
         )
         schedule.every().day.at("12:00").do(
             self._run_weekday_report,
@@ -119,6 +124,10 @@ class MarketMonitor:
             self._run_weekday_report,
             include_intraday=True,
             session_context="INTRADAY (3pm). Markets close at 4pm. Prices are live.",
+        )
+        schedule.every().day.at("16:15").do(
+            self._run_weekday_report,
+            session_context="POST-MARKET (4:15pm). Markets closed at 4pm. Prices are today's close.",
         )
         schedule.every().day.at("21:00").do(
             self._run_weekday_report,

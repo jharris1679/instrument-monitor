@@ -26,9 +26,11 @@ All times are local. Managed by `schedule` library in `run_scheduler.py`.
 | Time  | Days      | Type         | Notes                                      |
 |-------|-----------|--------------|---------------------------------------------|
 | 08:00 | Daily     | Data update  | Update OHLCV CSVs (`update_historical`)     |
-| 09:00 | Weekdays  | PRE-MARKET   | Prices are prior close                      |
+| 08:00 | Weekdays  | PRE-MARKET   | Prices are prior close                      |
+| 09:45 | Weekdays  | INTRADAY     | 15 min after open, includes 5-min bars      |
 | 12:00 | Weekdays  | INTRADAY     | Includes 5-min bars, prices are live        |
 | 15:00 | Weekdays  | INTRADAY     | Includes 5-min bars, prices are live        |
+| 16:15 | Weekdays  | POST-MARKET  | 15 min after close, prices are today's close|
 | 21:00 | Weekdays  | POST-MARKET  | Prices are today's close                    |
 | 09:00 | Weekends  | WEEKEND      | Markets closed, focus on newsflow           |
 

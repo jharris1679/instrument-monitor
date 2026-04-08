@@ -332,6 +332,27 @@ class BriefingSignature(dspy.Signature):
     - 1M: [buy/sell] [ticker] [strike] [call/put] [expiry] — [structure] — [reasoning]
     - 3M: [buy/sell] [ticker] [strike] [call/put] [expiry] — [structure] — [reasoning]
 
+    Options structures reference (use correctly):
+      Bull call spread: BUY lower-strike call, SELL higher-strike call → bullish
+      Bear call spread: SELL lower-strike call, BUY higher-strike call → bearish
+      Bull put spread: SELL higher-strike put, BUY lower-strike put → bullish
+      Bear put spread: BUY higher-strike put, SELL lower-strike put → bearish
+      Single leg: BUY a call (bullish) or BUY a put (bearish)
+    The structure name MUST match your directional thesis. Strikes must be near
+    the current price in price_table — not invented.
+
+    Moneyness — strike selection relative to current price:
+      ITM (in the money): strike below price for calls, above for puts.
+        Higher delta, more expensive, less leverage. Use for high-conviction
+        directional bets or shorter timeframes (1W) where you need delta now.
+      ATM (at the money): strike ≈ current price.
+        Balanced cost/leverage. Good default for moderate conviction.
+      OTM (out of the money): strike above price for calls, below for puts.
+        Cheap, high leverage, low probability. Use for longer timeframes (3M)
+        or tail-risk plays where the move hasn't started yet.
+    Match moneyness to conviction and timeframe: 1W → ATM/slight ITM,
+    1M → ATM/slight OTM, 3M → OTM is fine if thesis is strong.
+
     Examples:
       1W: Buy SPY 680c exp 3/14 — single leg — momentum above 50-day SMA
       1M: Sell TLT 88/85 put spread exp 4/17 — bull put spread — yields stabilizing near 200-day

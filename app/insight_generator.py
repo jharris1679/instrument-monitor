@@ -30,9 +30,10 @@ def _get_model_id(base_url: str) -> str:
 
 
 _base_url = os.getenv("RLMKIT_BASE_URL", "http://localhost:8082/v1")
+_model_id = os.getenv("MODEL_ID") or _get_model_id(_base_url)
 
 lm = dspy.LM(
-    model=f"openai/{_get_model_id(_base_url)}",
+    model=f"openai/{_model_id}",
     api_base=_base_url,
     api_key="not-needed",
     max_tokens=4096,
